@@ -167,6 +167,4 @@ cython_debug/
 db
 
 .vscode
-/poetry.lock
 .idea/
-
