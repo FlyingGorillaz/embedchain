@@ -1,86 +1,82 @@
 import logging
-import os
 
 from chromadb.errors import InvalidDimensionException
-from dotenv import load_dotenv
-from langchain.docstore.document import Document
-from langchain.memory import ConversationBufferMemory
-
-from embedchain.config import AddConfig, ChatConfig, QueryConfig
-from embedchain.config.apps.BaseAppConfig import BaseAppConfig
-from embedchain.config.QueryConfig import DOCS_SITE_PROMPT_TEMPLATE
+from embedchain.utils.config import read_yaml_file
+import importlib
 from embedchain.data_formatter import DataFormatter
-
-load_dotenv()
-
-ABS_PATH = os.getcwd()
-DB_DIR = os.path.join(ABS_PATH, "db")
-
-memory = ConversationBufferMemory()
+from embedchain.config.QueryConfig import DOCS_SITE_PROMPT_TEMPLATE
+from langchain.memory import ConversationBufferMemory
+from langchain.docstore.document import Document
 
 
-class EmbedChain:
-    def __init__(self, config: BaseAppConfig):
+BOT_CONFIG_MAP = {
+    "gpt3": {
+        "module": "langchain.llms.OpenAI",
+        "path": "embedchain/configs/gpt3.yaml",
+        "query": "openai.ChatCompletion.create",
+    },
+    "gpt4": {
+        "module": "langchain.llms.OpenAI",
+        "path": "embedchain/configs/gpt4.yaml",
+        "query": "gpt4all.GPT4All.generate",
+    },
+}
+
+
+class Bot:
+    def __init__(self, name):
         """
-        Initializes the EmbedChain instance, sets up a vector DB client and
+        Initializes the Bot instance, sets up a vector DB client and
         creates a collection.
 
-        :param config: BaseAppConfig instance to load as configuration.
+        :param name: Name of the configuration user wants to use
         """
-
-        self.config = config
-        self.db_client = self.config.db.client
-        self.collection = self.config.db.collection
+        if name not in BOT_CONFIG_MAP:
+            raise ValueError(f"Bot {name} not found in config map")
+        self.name = name
+        self.llm = self._load_module(BOT_CONFIG_MAP[name]["module"])
+        self.config_path = BOT_CONFIG_MAP[name]["path"]
+        self.config = read_yaml_file(self.config_path)
+        embedding_fn_config = self.config.get("embedding_model")
+        self.embedding_fn = self._load_module(embedding_fn_config["module"])(**embedding_fn_config["config"])
+        self.db_client = self.load_db_client()
+        self.collection = self.db_client.collection
+        self.memory = ConversationBufferMemory()
         self.user_asks = []
-        self.is_docs_site_instance = False
-        self.online = False
 
-    def add(self, data_type, url, metadata=None, config: AddConfig = None):
-        """
-        Adds the data from the given URL to the vector db.
-        Loads the data, chunks it, create embedding for each chunk
-        and then stores the embedding to vector database.
+    def load_db_client(self):
+        # Load the database client based on the config
+        db_config = self.config.get("db")
+        host, port = db_config.get("host"), db_config.get("port")
+        if db_config["name"] == "chroma":
+            from embedchain.vectordb.chroma_db import ChromaDB
 
-        :param data_type: The type of the data to add.
-        :param url: The URL where the data is located.
-        :param metadata: Optional. Metadata associated with the data source.
-        :param config: Optional. The `AddConfig` instance to use as configuration
-        options.
-        """
-        if config is None:
-            config = AddConfig()
+            db_dir = db_config.get("db_dir")
+            host = db_config.get("host")
+            port = db_config.get("port")
+            # import pdb
 
-        data_formatter = DataFormatter(data_type, config)
-        self.user_asks.append([data_type, url, metadata])
-        self.load_and_embed(data_formatter.loader, data_formatter.chunker, url, metadata)
-        if data_type in ("docs_site",):
-            self.is_docs_site_instance = True
+            # pdb.set_trace()
+            if host and port:
+                return ChromaDB(embedding_fn=self.embedding_fn, host=host, port=port)
+            else:
+                return ChromaDB(embedding_fn=self.embedding_fn, db_dir=db_dir)
+        else:
+            raise NotImplementedError(f"DB {embedding_fn_config['name']} not implemented")
 
-    def add_local(self, data_type, content, metadata=None, config: AddConfig = None):
-        """
-        Adds the data you supply to the vector db.
-        Loads the data, chunks it, create embedding for each chunk
-        and then stores the embedding to vector database.
+    def _load_module(self, name):
+        try:
+            module_components = name.split(".")
+            target_name = module_components[-1]
+            module_name = ".".join(module_components[:-1])
 
-        :param data_type: The type of the data to add.
-        :param content: The local data. Refer to the `README` for formatting.
-        :param metadata: Optional. Metadata associated with the data source.
-        :param config: Optional. The `AddConfig` instance to use as
-        configuration options.
-        """
-        if config is None:
-            config = AddConfig()
+            module = importlib.import_module(module_name)
+            target = getattr(module, target_name)
+            return target
+        except (ImportError, AttributeError) as e:
+            raise ImportError(f"Failed to extract '{target_name}' from module '{module_name}': {e}")
 
-        data_formatter = DataFormatter(data_type, config)
-        self.user_asks.append([data_type, content])
-        self.load_and_embed(
-            data_formatter.loader,
-            data_formatter.chunker,
-            content,
-            metadata,
-        )
-
-    def load_and_embed(self, loader, chunker, src, metadata=None):
+    def _load_and_embed(self, loader, chunker, src, metadata=None):
         """
         Loads the data from the given URL, chunks it, and adds it to database.
 
@@ -94,9 +90,7 @@ class EmbedChain:
         documents = embeddings_data["documents"]
         metadatas = embeddings_data["metadatas"]
         ids = embeddings_data["ids"]
-        # get existing ids, and discard doc if any common id exist.
-        where = {"app_id": self.config.id} if self.config.id is not None else {}
-        # where={"url": src}
+        where = {"app_id": self.config.get("id")} if self.config.get("id") is not None else {}
         existing_docs = self.collection.get(
             ids=ids,
             where=where,  # optional filter
@@ -115,8 +109,8 @@ class EmbedChain:
             documents, metadatas = zip(*data_dict.values())
 
         # Add app id in metadatas so that they can be queried on later
-        if self.config.id is not None:
-            metadatas = [{**m, "app_id": self.config.id} for m in metadatas]
+        if self.config.get("id") is not None:
+            metadatas = [{**m, "app_id": self.config.get("id")} for m in metadatas]
 
         # FIXME: Fix the error handling logic when metadatas or metadata is None
         metadatas = metadatas if metadatas else []
@@ -127,7 +121,7 @@ class EmbedChain:
         metadatas_with_metadata = [{**meta, **metadata} for meta in metadatas]
 
         self.collection.add(documents=documents, metadatas=list(metadatas_with_metadata), ids=ids)
-        print((f"Successfully saved {src}. New chunks count: " f"{self.count() - chunks_before_addition}"))
+        logging.info((f"Successfully saved {src}. New chunks count: " f"{self.count() - chunks_before_addition}"))
 
     def _format_result(self, results):
         return [
@@ -139,13 +133,7 @@ class EmbedChain:
             )
         ]
 
-    def get_llm_model_answer(self):
-        """
-        Usually implemented by child class
-        """
-        raise NotImplementedError
-
-    def retrieve_from_database(self, input_query, config: QueryConfig):
+    def retrieve_from_database(self, input_query, config):
         """
         Queries the vector database based on the given input query.
         Gets relevant doc based on the query
@@ -155,7 +143,7 @@ class EmbedChain:
         :return: The content of the document that matched your query.
         """
         try:
-            where = {"app_id": self.config.id} if self.config.id is not None else {}  # optional filter
+            where = {"app_id": self.config.get("id")} if self.config.get("id") is not None else {}  # optional filter
             result = self.collection.query(
                 query_texts=[
                     input_query,
@@ -176,15 +164,14 @@ class EmbedChain:
     def _append_search_and_context(self, context, web_search_result):
         return f"{context}\nWeb Search Result: {web_search_result}"
 
-    def generate_prompt(self, input_query, contexts, config: QueryConfig, **kwargs):
+    def _generate_prompt(self, input_query, contexts, config, **kwargs):
         """
         Generates a prompt based on the given query and context, ready to be
         passed to an LLM
 
         :param input_query: The query to use.
         :param contexts: List of similar documents to the query used as context.
-        :param config: Optional. The `QueryConfig` instance to use as
-        configuration options.
+        :param config: Optional.
         :return: The prompt
         """
         context_string = (" | ").join(contexts)
@@ -197,25 +184,23 @@ class EmbedChain:
             prompt = config.template.substitute(context=context_string, query=input_query, history=config.history)
         return prompt
 
-    def get_answer_from_llm(self, prompt, config: ChatConfig):
-        """
-        Gets an answer based on the given query and context by passing it
-        to an LLM.
-
-        :param query: The query to use.
-        :param context: Similar documents to the query used as context.
-        :return: The answer.
-        """
-        return self.get_llm_model_answer(prompt, config)
-
-    def access_search_and_get_results(self, input_query):
+    def _access_search_and_get_results(self, input_query):
         from langchain.tools import DuckDuckGoSearchRun
 
         search = DuckDuckGoSearchRun()
         logging.info(f"Access search to get answers for {input_query}")
         return search.run(input_query)
 
-    def query(self, input_query, config: QueryConfig = None, dry_run=False):
+    def add(self, data_type, url, metadata=None, config=None):
+        if config is None:
+            config = {"chunk_size": 2000, "chunk_overlap": 0, "length_function": len}
+        data_formatter = DataFormatter(data_type, config)
+        self.user_asks.append([data_type, url, metadata])
+        self._load_and_embed(data_formatter.loader, data_formatter.chunker, url, metadata)
+        if data_type in ("docs_site",):
+            self.is_docs_site_instance = True
+
+    def query(self, input_query, config=None, dry_run=False):
         """
         Queries the vector database based on the given input query.
         Gets relevant doc based on the query and then passes it to an
@@ -233,15 +218,15 @@ class EmbedChain:
         :return: The answer to the query.
         """
         if config is None:
-            config = QueryConfig()
+            config = self.config["query"]
         if self.is_docs_site_instance:
             config.template = DOCS_SITE_PROMPT_TEMPLATE
             config.number_documents = 5
         k = {}
         if self.online:
-            k["web_search_result"] = self.access_search_and_get_results(input_query)
+            k["web_search_result"] = self._access_search_and_get_results(input_query)
         contexts = self.retrieve_from_database(input_query, config)
-        prompt = self.generate_prompt(input_query, contexts, config, **k)
+        prompt = self._generate_prompt(input_query, contexts, config, **k)
         logging.info(f"Prompt: {prompt}")
 
         if dry_run:
@@ -262,7 +247,7 @@ class EmbedChain:
             yield chunk
         logging.info(f"Answer: {streamed_answer}")
 
-    def chat(self, input_query, config: ChatConfig = None, dry_run=False):
+    def chat(self, input_query, config=None, dry_run=False):
         """
         Queries the vector database on the given input query.
         Gets relevant doc based on the query and then passes it to an
@@ -281,22 +266,21 @@ class EmbedChain:
         :return: The answer to the query.
         """
         if config is None:
-            config = ChatConfig()
+            config = self.config["chat"]
         if self.is_docs_site_instance:
             config.template = DOCS_SITE_PROMPT_TEMPLATE
             config.number_documents = 5
         k = {}
         if self.online:
-            k["web_search_result"] = self.access_search_and_get_results(input_query)
+            k["web_search_result"] = self._access_search_and_get_results(input_query)
         contexts = self.retrieve_from_database(input_query, config)
 
-        global memory
-        chat_history = memory.load_memory_variables({})["history"]
+        chat_history = self.memory.load_memory_variables({})["history"]
 
         if chat_history:
             config.set_history(chat_history)
 
-        prompt = self.generate_prompt(input_query, contexts, config, **k)
+        prompt = self._generate_prompt(input_query, contexts, config, **k)
         logging.info(f"Prompt: {prompt}")
 
         if dry_run:
@@ -304,10 +288,10 @@ class EmbedChain:
 
         answer = self.get_answer_from_llm(prompt, config)
 
-        memory.chat_memory.add_user_message(input_query)
+        self.memory.chat_memory.add_user_message(input_query)
 
         if isinstance(answer, str):
-            memory.chat_memory.add_ai_message(answer)
+            self.memory.chat_memory.add_ai_message(answer)
             logging.info(f"Answer: {answer}")
             return answer
         else:
@@ -319,7 +303,7 @@ class EmbedChain:
         for chunk in answer:
             streamed_answer = streamed_answer + chunk
             yield chunk
-        memory.chat_memory.add_ai_message(streamed_answer)
+        self.memory.chat_memory.add_ai_message(streamed_answer)
         logging.info(f"Answer: {streamed_answer}")
 
     def count(self):

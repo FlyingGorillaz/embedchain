@@ -5,7 +5,6 @@ from embedchain.chunkers.qna_pair import QnaPairChunker
 from embedchain.chunkers.text import TextChunker
 from embedchain.chunkers.web_page import WebPageChunker
 from embedchain.chunkers.youtube_video import YoutubeVideoChunker
-from embedchain.config import AddConfig
 from embedchain.loaders.docs_site_loader import DocsSiteLoader
 from embedchain.loaders.docx_file import DocxFileLoader
 from embedchain.loaders.local_qna_pair import LocalQnaPairLoader
@@ -15,6 +14,8 @@ from embedchain.loaders.sitemap import SitemapLoader
 from embedchain.loaders.web_page import WebPageLoader
 from embedchain.loaders.youtube_video import YoutubeVideoLoader
 
+from embedchain.config import ChunkerConfig
+
 
 class DataFormatter:
     """
@@ -23,11 +24,12 @@ class DataFormatter:
     .add or .add_local method call
     """
 
-    def __init__(self, data_type: str, config: AddConfig):
-        self.loader = self._get_loader(data_type, config.loader)
-        self.chunker = self._get_chunker(data_type, config.chunker)
+    def __init__(self, data_type: str, config):
+        self.chunker_config = ChunkerConfig(**config)
+        self.loader = self._get_loader(data_type)
+        self.chunker = self._get_chunker(data_type)
 
-    def _get_loader(self, data_type, config):
+    def _get_loader(self, data_type):
         """
         Returns the appropriate data loader for the given data type.
 
@@ -50,7 +52,7 @@ class DataFormatter:
         else:
             raise ValueError(f"Unsupported data type: {data_type}")
 
-    def _get_chunker(self, data_type, config):
+    def _get_chunker(self, data_type):
         """
         Returns the appropriate chunker for the given data type.
 
@@ -70,7 +72,7 @@ class DataFormatter:
         }
         if data_type in chunker_classes:
             chunker_class = chunker_classes[data_type]
-            chunker = chunker_class(config)
+            chunker = chunker_class(self.chunker_config)
             chunker.set_data_type(data_type)
             return chunker
         else:

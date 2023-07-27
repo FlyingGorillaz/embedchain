@@ -3,7 +3,7 @@ import logging
 import requests
 from bs4 import BeautifulSoup
 
-from embedchain.utils import clean_string
+from embedchain.utils.string import clean_string
 
 
 class WebPageLoader:

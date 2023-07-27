@@ -1,4 +1,4 @@
-from .AddConfig import AddConfig, ChunkerConfig  # noqa: F401
+from .AddConfig import ChunkerConfig  # noqa: F401
 from .apps.AppConfig import AppConfig  # noqa: F401
 from .apps.CustomAppConfig import CustomAppConfig  # noqa: F401
 from .apps.OpenSourceAppConfig import OpenSourceAppConfig  # noqa: F401

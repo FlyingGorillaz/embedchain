@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 from bs4.builder import ParserRejectedMarkup
 
 from embedchain.loaders.web_page import WebPageLoader
-from embedchain.utils import is_readable
+from embedchain.utils.string import is_readable
 
 
 class SitemapLoader:

@@ -1,0 +1,24 @@
+llm:
+  model_key: claude-1
+  name: gpt-3.5
+  temperature: 0
+  max_token: 1000
+  top_p: 1
+  stream: false
+  other_stuff: some_value_here
+
+embedding_model:
+  name: text-embedding-ada-002
+  module: chromadb.utils.embedding_functions.OpenAIEmbeddingFunction
+  config:
+    api_key: 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
+    organization_id: null
+    model_name: text-embedding-ada-002
+
+db:
+  name: chroma
+  module: embedchain.vectordb.chroma_db.ChromaDB
+  config:
+    db_dir: db
+    # host: localhost
+    # port: 6000

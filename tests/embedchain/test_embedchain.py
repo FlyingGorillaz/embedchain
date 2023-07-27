@@ -16,10 +16,6 @@ class TestChromaDbHostsLoglevel(unittest.TestCase):
     @patch("embedchain.embedchain.EmbedChain.get_llm_model_answer")
     def test_whole_app(
         self,
-        _mock_get,
-        _mock_add,
-        _mock_ec_retrieve_from_database,
-        _mock_get_answer_from_llm,
         mock_ec_get_llm_model_answer,
     ):
         """

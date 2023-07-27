@@ -1,6 +1,6 @@
 from langchain.document_loaders import PyPDFLoader
 
-from embedchain.utils import clean_string
+from embedchain.utils.string import clean_string
 
 
 class PdfFileLoader:
