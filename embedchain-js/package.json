@@ -20,9 +20,9 @@
     "axios": "^1.4.0",
     "chromadb": "^1.5.6",
     "jsdom": "^22.1.0",
-    "langchain": "^0.0.136",
+    "langchain": "^0.3.19",
     "openai": "^4.3.1",
-    "pdfjs-dist": "^3.8.162",
+    "pdfjs-dist": "^4.2.67",
     "uuid": "^9.0.0"
   },
   "devDependencies": {
